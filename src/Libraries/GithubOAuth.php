@@ -89,7 +89,44 @@ class GithubOAuth extends AbstractOAuth
             exit($e->getMessage());
         }
 
-        return json_decode($response->getBody());
+        $userInfo = json_decode($response->getBody(), false);
+
+        /**
+         * The /user API returns only the publicly visible email address or null if none is set.
+         */
+        if (empty($userInfo->email)) {
+
+            /**
+             * The /user/emails API returns the user's email addresses regardless if their status is set public or not.
+             * @see https://docs.github.com/en/rest/users/emails?apiVersion=2022-11-28#list-email-addresses-for-a-user
+             */
+            try {
+                $response = $this->client->request('GET', self::$API_USER_INFO_URL . '/emails', [
+                    'headers'     => [
+                        'User-Agent'    => self::$APPLICATION_NAME . '/1.0',
+                        'Accept'        => 'application/vnd.github+json',
+                        'Authorization' => 'Bearer ' . $this->getToken(),
+                    ],
+                    'http_errors' => false,
+                ]);
+            } catch (Exception $e) {
+                exit($e->getMessage());
+            }
+
+            $emailAddresses = json_decode($response->getBody(), false);
+
+            if (empty($emailAddresses)) {
+                throw new Exception('No email addresses found for the user');
+            }
+
+            /**
+             * If multiple email addresses are returned try to get the one marked as primary, otherwise grab the first one
+             */
+            $primaryEmail    = array_filter($emailAddresses, static fn($eMail) => $eMail->primary);
+            $userInfo->email = !empty($primaryEmail) ? array_shift($primaryEmail)->email : array_shift($emailAddresses)->email;
+        }
+
+        return $userInfo;
     }
 
     protected function setColumnsName(string $nameOfProcess, $userInfo): array
